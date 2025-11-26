@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Cosmografía Fractal (PCC)</title>
+    
+    <style>
+        /* Configura el cuerpo para que no tenga márgenes y oculte barras de desplazamiento (Fullscreen) */
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        
+        /* Estilo para el cuadro de información flotante en la esquina */
+        #info {
+            position: absolute;     /* Posición libre sobre el canvas */
+            top: 10px; left: 10px;  /* Ubicación esquina superior izquierda */
+            color: white;           /* Texto blanco */
+            font-family: sans-serif; 
+            background: rgba(0,0,0,0.7); /* Fondo negro semitransparente para leer mejor */
+            padding: 10px; 
+            border-radius: 5px;     /* Bordes redondeados */
+            pointer-events: none;   /* Permite hacer clic "a través" del cuadro (no bloquea el mouse) */
+            user-select: none;      /* Evita que el usuario seleccione el texto accidentalmente */
+        }
+    </style>
+    
+    <script src="MVnew.js"></script>
+    <script src="initShaders.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
+
+    <script id="vertex-shader" type="x-shader/x-vertex">
+    #version 300 es
+    
+    // --- ATRIBUTOS (Datos únicos por cada estrella) ---
+    in vec3 a_posUniform;  // Posición en la Rejilla (Modo Uniforme / Principio Fuerte)
+    in vec3 a_posFractal;  // Posición en el Cúmulo (Modo Fractal / Principio Condicional)
+    in float a_size;       // Tamaño base aleatorio de esta estrella
+    in float a_colorVar;   // Variación de color (0.0 a 1.0) para esta estrella
+
+    // --- UNIFORMS (Variables globales controladas desde JS/UI) ---
+    uniform mat4 u_modelViewMatrix;  // Matriz de Cámara y Movimiento
+    uniform mat4 u_projectionMatrix; // Matriz de Perspectiva 3D
+    uniform float u_mixFactor;       // El Slider: 0.0 (Uniforme) <-> 1.0 (Fractal)
+    uniform float u_time;            // Tiempo actual para animación
+    uniform float u_speed;           // Velocidad de vuelo
+    uniform float u_baseSize;        // Multiplicador global de tamaño
+
+    // --- SALIDAS (Datos que enviamos al Fragment Shader) ---
+    out float v_opacity;   // Opacidad calculada (para niebla)
+    out float v_colorMix;  // Pasamos el dato de color para que lo use el fragment
+
+    void main() {
+        // 1. MORPHING (LA TEORÍA DEL PROYECTO):
+        // La función mix() interpola linealmente entre la posición Uniforme y la Fractal
+        // Esto visualiza el dilema: ¿El universo es ordenado o agrupado?
+        vec3 mixedPos = mix(a_posUniform, a_posFractal, u_mixFactor);
+
+        // 2. ANIMACIÓN DE VUELO INFINITO:
+        // Movemos la estrella en Z. Usamos 'mod' (módulo) para crear un bucle:
+        // cuando la estrella pasa detrás de la cámara, reaparece al fondo (3000 unidades atrás).
+        float zPos = mod(mixedPos.z + (u_time * u_speed), 3000.0) - 1500.0;
+        
+        // Construimos la posición final combinando X, Y interpolados y la nueva Z animada
+        // El 1.0 final es la coordenada W homogénea (necesaria para matrices 4x4)
+        vec4 pos = u_modelViewMatrix * vec4(mixedPos.x, mixedPos.y, zPos, 1.0);
+
+        // 3. CÁLCULO DE TAMAÑO Y EFECTOS VISUALES:
+        
+        // Escala por distancia: (1000 / -Z). Cuanto más lejos (-Z grande), más pequeño el número.
+        float distScale = 1000.0 / -pos.z;
+        
+        // Efecto "Twinkle" (Parpadeo):
+        // Usamos seno del tiempo. Usamos a_size como semilla para que no parpadeen todas igual.
+        // Valores fijos: Velocidad 5.0, frecuencia 10.0.
+        float twinkle = 0.7 + 0.3 * sin(u_time * 5.0 + a_size * 10.0);
+        
+        // Tamaño Final del Punto (gl_PointSize es una variable reservada de WebGL):
+        // Combina: Tamaño individual * Slider Base * Distancia * Parpadeo
+        // max(0.0, ...) asegura que no sea negativo.
+        gl_PointSize = max(0.0, a_size * u_baseSize * distScale * twinkle);
+
+        // Niebla (Fog):
+        // smoothstep hace que la opacidad baje suavemente a 0 cuando la estrella está muy lejos
+        float fog = smoothstep(1500.0, 1000.0, abs(zPos));
+        
+        // Ajuste de visibilidad según el modo:
+        // En modo Fractal (mix 1.0) brillan más. En Uniforme (mix 0.8) son un poco más tenues.
+        v_opacity = fog * mix(0.8, 1.0, u_mixFactor); 
+        
+        // Pasar la variación de color al siguiente paso
+        v_colorMix = a_colorVar;
+        
+        // Posición final en pantalla (Clip Space)
+        gl_Position = u_projectionMatrix * pos;
+    }
+    </script>
+
+    <script id="fragment-shader" type="x-shader/x-fragment">
+    #version 300 es
+    // Definimos precisión media para rendimiento en móviles/web
+    precision mediump float;
+
+    // Uniforms de color definidos en la UI
+    uniform vec3 u_colorCore; // Color central
+    uniform vec3 u_colorRim;  // Color del borde
+    // IMPORTANTE: Usamos 'highp' aquí para igualar la precisión del Vertex Shader
+    // y evitar el error de "Link Error: Precisions differ"
+    uniform highp float u_mixFactor; 
+
+    // Entradas que vienen del Vertex Shader (interpoladas)
+    in float v_opacity;
+    in float v_colorMix;
+    
+    // Salida final: El color del píxel en pantalla
+    out vec4 outColor;
+
+    void main() {
+        // 1. FORMA REDONDA:
+        // gl_PointCoord va de (0,0) a (1,1) dentro del punto cuadrado.
+        // Restamos 0.5 para centrar las coordenadas en (0,0).
+        vec2 coord = gl_PointCoord - vec2(0.5);
+        
+        // Calculamos la distancia al centro
+        float dist = length(coord);
+        
+        // Si la distancia es mayor a 0.5 (radio), es una esquina del cuadrado.
+        // La descartamos (la hacemos transparente) para que quede un círculo.
+        if (dist > 0.5) discard;
+
+        // 2. SISTEMA DE COLOR:
+        // Color Fractal: Mezcla entre núcleo y borde según la variación única de la estrella
+        vec3 fractalColor = mix(u_colorCore, u_colorRim, v_colorMix);
+        
+        // Color Uniforme: Blanco/Gris (0.9) para representar la "sopa homogénea" aburrida
+        vec3 uniformColor = vec3(0.9, 0.9, 0.9); 
+
+        // Interpolamos el color final según el slider de la UI
+        vec3 finalColor = mix(uniformColor, fractalColor, u_mixFactor);
+
+        // 3. EFECTO GLOW (BRILLO):
+        // Invertimos la distancia: 1.0 en el centro, 0.0 en el borde.
+        float alpha = 1.0 - (dist * 2.0);
+        // Elevamos al cuadrado para que la caída de luz sea más suave (tipo esfera de gas)
+        alpha = pow(alpha, 2.0); 
+
+        // Asignar color final (RGB) y transparencia (Alpha * Opacidad calculada antes)
+        outColor = vec4(finalColor, alpha * v_opacity);
+    }
+    </script>
+</head>
+<body>
+    <div id="info">
+        <h2>Proyecto Final: Estacionariedad Condicional</h2>
+        <p>Visualización: Principio Uniforme vs. Fractal</p>
+    </div>
+    
+    <canvas id="gl-canvas"></canvas>
+    
+    <script src="Project.js"></script>
+</body>
+</html>
