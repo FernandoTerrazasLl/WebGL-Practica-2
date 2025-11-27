@@ -28,8 +28,6 @@ const settings = {
     // Visuales (Uniforms rápidos)
     speed: 30.0,            // Velocidad de viaje
     baseSize: 3.0,          // Tamaño base
-    minSize: 0.5,           // Tamaño mínimo (estrellas lejanas)
-    twinkleSpeed: 5.0,      // Velocidad de parpadeo
     
     // Colores
     colorCore: [200, 220, 255], // Color central
@@ -191,8 +189,6 @@ function initGUI() {
     const f3 = gui.addFolder('Experiencia Visual');
     f3.add(settings, 'speed', 0.0, 300.0).name('Velocidad Luz');
     f3.add(settings, 'baseSize', 1.0, 30.0).name('Tamaño Base');
-    f3.add(settings, 'minSize', 0.0, 2.0).name('Tamaño Min');
-    f3.add(settings, 'twinkleSpeed', 0.0, 20.0).name('Velocidad Parpadeo');
     f3.addColor(settings, 'colorCore').name('Color Núcleo');
     f3.addColor(settings, 'colorRim').name('Color Borde');
     f3.open();
@@ -216,8 +212,6 @@ function render() {
     gl.uniform1f(uLoc("u_time"), time);
     gl.uniform1f(uLoc("u_speed"), settings.speed);
     gl.uniform1f(uLoc("u_baseSize"), settings.baseSize);
-    gl.uniform1f(uLoc("u_minSize"), settings.minSize);
-    gl.uniform1f(uLoc("u_twinkleSpeed"), settings.twinkleSpeed);
 
     // Colores
     gl.uniform3f(uLoc("u_colorCore"), settings.colorCore[0]/255, settings.colorCore[1]/255, settings.colorCore[2]/255);
