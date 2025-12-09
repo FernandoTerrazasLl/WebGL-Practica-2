@@ -1,258 +1,268 @@
 "use strict";
 
 // ============================================================================
-// CONFIGURACIÓN GLOBAL Y VARIABLES
+// VARIABLES PRINCIPALES DEL PROGRAMA
 // ============================================================================
 let gl, program;
-let numParticles = 40000; // ¡Más estrellas para mayor impacto!
-let time = 0;
+let cantidad_estrellas = 40000; // Cantidad total de estrellas que vamos a dibujar
+let tiempo_animacion = 0; // Contador de tiempo para mover las estrellas hacia nosotros
 
-// Buffers Globales (para poder regenerar datos)
-let bUniform, bFractal, bSize, bColorVar;
-let positionsUniform, positionsFractal, sizes, colorVariations;
+// Variables para guardar las posiciones y colores de las estrellas
+let buffer_posiciones_ordenadas, buffer_posiciones_agrupadas, buffer_tamanos, buffer_variaciones_color;
+let posiciones_ordenadas, posiciones_agrupadas, tamanos_estrellas, variaciones_color;
 
-// Variables de Mouse
-let mouseX = 0, mouseY = 0;
-let targetMouseX = 0, targetMouseY = 0;
+// Variables para saber dónde está el mouse
+let mouse_x = 0, mouse_y = 0;
+let objetivo_mouse_x = 0, objetivo_mouse_y = 0;
 
-// AJUSTES DE LA UI (Lo que el usuario controla)
-const settings = {
-    // Teoría
-    morphFactor: 1.0,       // 1.0 = Fractal (PCC), 0.0 = Uniforme
+// CONFIGURACIÓN DEL MENÚ (lo que el usuario puede cambiar)
+const configuracion_menu = {
+    // Control principal: si queremos ver las estrellas ordenadas o agrupadas
+    factor_mezcla: 1.0,       // 1.0 = agrupadas en galaxias, 0.0 = ordenadas en cuadrícula
     
-    // Generación Fractal (Requieren regenerar geometría)
-    clusterCount: 50,       // Cuántas "Galaxias" hay
-    clusterSpread: 350.0,   // Qué tan dispersas son las estrellas del centro
-    fractalPower: 2.5,      // Ley de Potencias (Más alto = Más agrupado)
+    // Configuración de las galaxias (cuando cambian estos valores, se recalculan las posiciones)
+    cantidad_galaxias: 50,       // Cantidad de galaxias que habrá
+    dispersion_galaxias: 350.0,   // Qué tan separadas están las estrellas dentro de cada galaxia
+    poder_fractal: 2.5,      // Qué tan juntas están las estrellas al centro de cada galaxia (más alto = más juntas)
     
-    // Visuales (Uniforms rápidos)
-    speed: 30.0,            // Velocidad de viaje
-    baseSize: 3.0,          // Tamaño base
+    // Configuración visual (estos se actualizan en tiempo real sin recalcular)
+    velocidad_viaje: 30.0,            // Qué tan rápido nos movemos entre las estrellas
+    tamano_base: 3.0,          // Tamaño general de las estrellas
     
-    // Colores
-    colorCore: [200, 220, 255], // Color central
-    colorRim: [50, 100, 255]    // Color de borde
+    // Colores de las estrellas
+    color_centro: [200, 220, 255], // Color del centro de cada estrella (azul claro)
+    color_borde: [50, 100, 255]    // Color del borde de cada estrella (azul oscuro)
 };
 
 // ============================================================================
-// INICIALIZACIÓN
+// INICIO DEL PROGRAMA (Se ejecuta cuando la página carga)
 // ============================================================================
 window.onload = function init() {
+    // Obtener el lienzo donde vamos a dibujar y hacerlo del tamaño de toda la ventana
     const canvas = document.getElementById("gl-canvas");
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
+    // Inicializar WebGL2 para poder dibujar en 3D
     gl = canvas.getContext("webgl2");
     if (!gl) { alert("WebGL 2.0 no disponible"); return; }
 
-    // Event Listeners para Mouse
+    // Detectar cuando el usuario mueve el mouse para rotar la cámara
     window.addEventListener('mousemove', e => {
-        // Normalizar de -1 a 1
-        targetMouseX = (e.clientX / window.innerWidth) * 2 - 1;
-        targetMouseY = (e.clientY / window.innerHeight) * 2 - 1;
+        // Convertir la posición del mouse a valores entre -1 y 1
+        objetivo_mouse_x = (e.clientX / window.innerWidth) * 2 - 1;
+        objetivo_mouse_y = (e.clientY / window.innerHeight) * 2 - 1;
     });
 
+    // Cargar y compilar los shaders (programas que dibujan en la GPU)
     program = initShaders(gl, "vertex-shader", "fragment-shader");
     gl.useProgram(program);
 
-    // Inicializar Buffers vacíos
-    setupBuffers();
+    // Preparar los espacios de memoria para las estrellas
+    configurar_buffers();
     
-    // Generar la primera versión del universo
-    regenerateGalaxy();
+    // Crear las posiciones de todas las estrellas por primera vez
+    regenerar_galaxia();
 
-    // Configurar WebGL
+    // Configurar cómo se va a ver el dibujo
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(0.0, 0.02, 0.05, 1.0); // Azul muy oscuro (Espacio profundo)
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Additive Blending (Brillo)
+    gl.clearColor(0.0, 0.02, 0.05, 1.0); // Color de fondo: azul muy oscuro (espacio)
+    gl.enable(gl.BLEND); // Activar transparencias
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Hacer que las estrellas brillen al superponerse
 
-    initGUI();
-    render();
+    // Crear el menú de controles
+    inicializar_menu();
+    
+    // Empezar a dibujar continuamente
+    dibujar();
 };
 
 // ============================================================================
-// GENERACIÓN PROCEDURAL DE DATOS (LA MAGIA MATEMÁTICA)
+// CREAR LAS POSICIONES DE TODAS LAS ESTRELLAS
 // ============================================================================
-function regenerateGalaxy() {
-    // Arrays tipados para rendimiento
-    positionsUniform = new Float32Array(numParticles * 3);
-    positionsFractal = new Float32Array(numParticles * 3);
-    sizes = new Float32Array(numParticles);
-    colorVariations = new Float32Array(numParticles); // 0.0 a 1.0
+function regenerar_galaxia() {
+    // Crear listas para guardar la información de cada estrella
+    posiciones_ordenadas = new Float32Array(cantidad_estrellas * 3); // 3 números por estrella (x, y, z)
+    posiciones_agrupadas = new Float32Array(cantidad_estrellas * 3);
+    tamanos_estrellas = new Float32Array(cantidad_estrellas); // Tamaño de cada estrella
+    variaciones_color = new Float32Array(cantidad_estrellas); // Variación de color (0 a 1)
 
-    // --- A. MODO UNIFORME (REJILLA + RUIDO) ---
-    // Creamos una estructura "casi" perfecta para representar el Principio Fuerte
-    const dim = Math.cbrt(numParticles); 
-    const spacing = 2200 / dim; 
-    const offset = 1100;
+    // --- A. MODO ORDENADO (CUADRÍCULA) ---
+    // Las estrellas se organizan en una cuadrícula 3D perfecta con un poco de desorden
+    const dimension = Math.cbrt(cantidad_estrellas); // Calcular cuántas estrellas por lado del cubo
+    const espacio = 2200 / dimension; // Espacio entre cada estrella
+    const centro = 1100; // Para centrar la cuadrícula en 0,0,0
 
-    let idx = 0;
-    for (let i = 0; i < numParticles; i++) {
-        // Coordenadas de rejilla
-        let x = (i % dim) * spacing - offset;
-        let y = (Math.floor(i / dim) % dim) * spacing - offset;
-        let z = (Math.floor(i / (dim * dim))) * spacing - offset;
+    let indice = 0;
+    for (let i = 0; i < cantidad_estrellas; i++) {
+        // Calcular posición en la cuadrícula
+        let x = (i % dimension) * espacio - centro;
+        let y = (Math.floor(i / dimension) % dimension) * espacio - centro;
+        let z = (Math.floor(i / (dimension * dimension))) * espacio - centro;
 
-        // Añadimos un poco de ruido para que no sea una línea aburrida
-        positionsUniform[idx] = x + (Math.random()-0.5)*50;
-        positionsUniform[idx+1] = y + (Math.random()-0.5)*50;
-        positionsUniform[idx+2] = z + (Math.random()-0.5)*50;
+        // Agregar un poquito de aleatoriedad para que no se vea tan perfecto
+        posiciones_ordenadas[indice] = x + (Math.random()-0.5)*50;
+        posiciones_ordenadas[indice+1] = y + (Math.random()-0.5)*50;
+        posiciones_ordenadas[indice+2] = z + (Math.random()-0.5)*50;
         
-        idx += 3;
+        indice += 3;
     }
 
-    // --- B. MODO FRACTAL (CLUSTERING) ---
-    // Algoritmo de Lévy Flight / Polvo de Cantor
-    idx = 0;
-    for (let i = 0; i < numParticles; i++) {
-        // 1. Elegir un "Cúmulo" (Galaxia)
-        const clusterID = Math.floor(Math.random() * settings.clusterCount);
+    // --- B. MODO AGRUPADO (GALAXIAS) ---
+    // Las estrellas se agrupan en galaxias, más densas en el centro
+
+    indice = 0;
+    for (let i = 0; i < cantidad_estrellas; i++) {
+        // 1. Elegir a qué galaxia pertenece esta estrella (aleatoriamente)
+        const id_galaxia = Math.floor(Math.random() * configuracion_menu.cantidad_galaxias);
         
-        // Posición del Cúmulo (Semilla determinista)
-        const cx = (Math.sin(clusterID * 43758.5453) - 0.5) * 1800;
-        const cy = (Math.cos(clusterID * 23421.6312) - 0.5) * 1800;
-        const cz = (Math.sin(clusterID * 87654.1234) - 0.5) * 1800;
+        // 2. Calcular la posición del centro de esa galaxia
+        // Usamos funciones matemáticas para que siempre quede en el mismo lugar
+        const centro_x = (Math.sin(id_galaxia * 43758.5453) - 0.5) * 1800;
+        const centro_y = (Math.cos(id_galaxia * 23421.6312) - 0.5) * 1800;
+        const centro_z = (Math.sin(id_galaxia * 87654.1234) - 0.5) * 1800;
 
-        // 2. Dispersión Fractal (Ley de Potencias)
-        // Esto controla qué tan "apretadas" están las estrellas
-        const r = Math.pow(Math.random(), settings.fractalPower) * settings.clusterSpread;
+        // 3. Calcular qué tan lejos del centro está esta estrella
+        // poder_fractal controla si están más juntas (valor alto) o separadas (valor bajo)
+        const distancia = Math.pow(Math.random(), configuracion_menu.poder_fractal) * configuracion_menu.dispersion_galaxias;
         
-        // Coordenadas esféricas aleatorias
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.random() * Math.PI;
+        // 4. Crear un ángulo aleatorio para que las estrellas rodeen el centro
+        const angulo_horizontal = Math.random() * Math.PI * 2; // Ángulo horizontal
+        const angulo_vertical = Math.random() * Math.PI; // Ángulo vertical
 
-        positionsFractal[idx] = cx + r * Math.sin(phi) * Math.cos(theta);
-        positionsFractal[idx+1] = cy + r * Math.sin(phi) * Math.sin(theta);
-        positionsFractal[idx+2] = cz + r * Math.cos(phi);
+        // 5. Calcular la posición final de la estrella sumando el centro + el desplazamiento
+        posiciones_agrupadas[indice] = centro_x + distancia * Math.sin(angulo_vertical) * Math.cos(angulo_horizontal);
+        posiciones_agrupadas[indice+1] = centro_y + distancia * Math.sin(angulo_vertical) * Math.sin(angulo_horizontal);
+        posiciones_agrupadas[indice+2] = centro_z + distancia * Math.cos(angulo_vertical);
 
-        // 3. Variación de Tamaño y Color
-        // Las estrellas en el centro de los cúmulos (r pequeño) suelen ser más viejas/grandes
-        let distFactor = 1.0 - (r / settings.clusterSpread); // 1.0 en el centro, 0.0 afuera
+        // 6. Las estrellas más cerca del centro son más grandes
+        let factor_distancia = 1.0 - (distancia / configuracion_menu.dispersion_galaxias); // 1.0 = centro, 0.0 = borde
         
-        sizes[i] = Math.random() * 1.5 + 0.5 + (distFactor * 2.0); // Centro = Más grandes
-        colorVariations[i] = Math.random(); // Variación aleatoria de tono
+        tamanos_estrellas[i] = Math.random() * 1.5 + 0.5 + (factor_distancia * 2.0); // Tamaño aleatorio + bonus por estar cerca
+        variaciones_color[i] = Math.random(); // Color aleatorio para cada estrella
 
-        idx += 3;
+        indice += 3;
     }
 
-    // Actualizar la GPU
-    gl.bindBuffer(gl.ARRAY_BUFFER, bUniform);
-    gl.bufferData(gl.ARRAY_BUFFER, positionsUniform, gl.STATIC_DRAW);
+    // Enviar todos estos datos a la tarjeta gráfica para que pueda dibujarlos
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer_posiciones_ordenadas);
+    gl.bufferData(gl.ARRAY_BUFFER, posiciones_ordenadas, gl.STATIC_DRAW);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, bFractal);
-    gl.bufferData(gl.ARRAY_BUFFER, positionsFractal, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer_posiciones_agrupadas);
+    gl.bufferData(gl.ARRAY_BUFFER, posiciones_agrupadas, gl.STATIC_DRAW);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, bSize);
-    gl.bufferData(gl.ARRAY_BUFFER, sizes, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer_tamanos);
+    gl.bufferData(gl.ARRAY_BUFFER, tamanos_estrellas, gl.STATIC_DRAW);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, bColorVar);
-    gl.bufferData(gl.ARRAY_BUFFER, colorVariations, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer_variaciones_color);
+    gl.bufferData(gl.ARRAY_BUFFER, variaciones_color, gl.STATIC_DRAW);
 }
 
-function setupBuffers() {
-    // Helper para crear buffers y atributos
-    const createBuf = (name, size) => {
-        const buf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-        const loc = gl.getAttribLocation(program, name);
-        gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
-        gl.enableVertexAttribArray(loc);
-        return buf;
+function configurar_buffers() {
+    // Función auxiliar para crear un espacio de memoria y conectarlo con el shader
+    const crear_buffer = (nombre, tamano) => {
+        const buffer = gl.createBuffer(); // Crear espacio de memoria en la GPU
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer); // Activar ese espacio
+        const ubicacion = gl.getAttribLocation(program, nombre); // Encontrar la variable en el shader
+        gl.vertexAttribPointer(ubicacion, tamano, gl.FLOAT, false, 0, 0); // Decirle cómo leer los datos
+        gl.enableVertexAttribArray(ubicacion); // Activar esa conexión
+        return buffer;
     };
 
-    bUniform = createBuf("a_posUniform", 3);
-    bFractal = createBuf("a_posFractal", 3);
-    bSize = createBuf("a_size", 1);
-    bColorVar = createBuf("a_colorVar", 1);
+    // Crear espacios de memoria para cada tipo de dato que necesitamos
+    buffer_posiciones_ordenadas = crear_buffer("a_posUniform", 3); // Posiciones ordenadas (3 valores: x,y,z)
+    buffer_posiciones_agrupadas = crear_buffer("a_posFractal", 3); // Posiciones agrupadas (3 valores: x,y,z)
+    buffer_tamanos = crear_buffer("a_size", 1); // Tamaño de cada estrella (1 valor)
+    buffer_variaciones_color = crear_buffer("a_colorVar", 1); // Variación de color (1 valor)
 }
 
 // ============================================================================
-// INTERFAZ DE USUARIO (DAT.GUI)
+// CREAR EL MENÚ DE CONTROLES
 // ============================================================================
-function initGUI() {
-    const gui = new dat.GUI({ width: 320 });
+function inicializar_menu() {
+    const menu = new dat.GUI({ width: 320 }); // Crear el menú con ancho de 320 pixeles
 
-    // Carpeta 1: El Concepto Principal
-    const f1 = gui.addFolder('COSMOGRAFÍA (Teoría)');
-    f1.add(settings, 'morphFactor', 0.0, 1.0).name('Uniforme ↔ Fractal').step(0.01).listen();
-    f1.open();
+    // Carpeta 1: El control principal para cambiar entre modos
+    const carpeta_teoria = menu.addFolder('COSMOGRAFÍA (Teoría)');
+    carpeta_teoria.add(configuracion_menu, 'factor_mezcla', 0.0, 1.0).name('Uniforme ↔ Fractal').step(0.01).listen();
+    carpeta_teoria.open(); // Dejar esta carpeta abierta por defecto
 
-    // Carpeta 2: Generación (Regenera el universo)
-    const f2 = gui.addFolder('Generación Fractal (Recalcula)');
-    f2.add(settings, 'clusterCount', 1, 200).name('Cant. Galaxias').step(1).onFinishChange(regenerateGalaxy);
-    f2.add(settings, 'clusterSpread', 100, 1000).name('Dispersión').onFinishChange(regenerateGalaxy);
-    f2.add(settings, 'fractalPower', 1.0, 5.0).name('Atracción Gravitatoria').onFinishChange(regenerateGalaxy);
-    f2.open();
+    // Carpeta 2: Controles que cambian cómo se crean las galaxias
+    const carpeta_generacion = menu.addFolder('Generación Fractal (Recalcula)');
+    carpeta_generacion.add(configuracion_menu, 'cantidad_galaxias', 1, 200).name('Cant. Galaxias').step(1).onFinishChange(regenerar_galaxia);
+    carpeta_generacion.add(configuracion_menu, 'dispersion_galaxias', 100, 1000).name('Dispersión').onFinishChange(regenerar_galaxia);
+    carpeta_generacion.add(configuracion_menu, 'poder_fractal', 1.0, 5.0).name('Atracción Gravitatoria').onFinishChange(regenerar_galaxia);
+    carpeta_generacion.open();
 
-    // Carpeta 3: Visuales (Tiempo real)
-    const f3 = gui.addFolder('Experiencia Visual');
-    f3.add(settings, 'speed', 0.0, 300.0).name('Velocidad Luz');
-    f3.add(settings, 'baseSize', 1.0, 30.0).name('Tamaño Base');
-    f3.addColor(settings, 'colorCore').name('Color Núcleo');
-    f3.addColor(settings, 'colorRim').name('Color Borde');
-    f3.open();
+    // Carpeta 3: Controles visuales que cambian en tiempo real
+    const carpeta_visual = menu.addFolder('Experiencia Visual');
+    carpeta_visual.add(configuracion_menu, 'velocidad_viaje', 0.0, 300.0).name('Velocidad Luz');
+    carpeta_visual.add(configuracion_menu, 'tamano_base', 1.0, 30.0).name('Tamaño Base');
+    carpeta_visual.addColor(configuracion_menu, 'color_centro').name('Color Núcleo');
+    carpeta_visual.addColor(configuracion_menu, 'color_borde').name('Color Borde');
+    carpeta_visual.open();
 }
 
 // ============================================================================
-// RENDER LOOP
+// FUNCIÓN QUE DIBUJA TODO (se ejecuta 60 veces por segundo)
 // ============================================================================
-function render() {
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    time += 0.01;
+function dibujar() {
+    gl.clear(gl.COLOR_BUFFER_BIT); // Limpiar la pantalla antes de dibujar
+    tiempo_animacion += 0.01; // Incrementar el tiempo para la animación
 
-    // Suavizado del movimiento del mouse (Inercia)
-    mouseX += (targetMouseX - mouseX) * 0.05;
-    mouseY += (targetMouseY - mouseY) * 0.05;
+    // Hacer que el movimiento del mouse sea suave (no brusco)
+    mouse_x += (objetivo_mouse_x - mouse_x) * 0.05; // Ir poco a poco hacia donde está el mouse
+    mouse_y += (objetivo_mouse_y - mouse_y) * 0.05;
 
-    // 1. Enviar Uniforms
-    const uLoc = (name) => gl.getUniformLocation(program, name);
+    // 1. Enviar los valores del menú al shader (la GPU)
+    const obtener_ubicacion_uniform = (nombre) => gl.getUniformLocation(program, nombre); // Función para encontrar variables
     
-    gl.uniform1f(uLoc("u_mixFactor"), settings.morphFactor);
-    gl.uniform1f(uLoc("u_time"), time);
-    gl.uniform1f(uLoc("u_speed"), settings.speed);
-    gl.uniform1f(uLoc("u_baseSize"), settings.baseSize);
+    gl.uniform1f(obtener_ubicacion_uniform("u_mixFactor"), configuracion_menu.factor_mezcla); // Enviar el valor del slider ordenado/agrupado
+    gl.uniform1f(obtener_ubicacion_uniform("u_time"), tiempo_animacion); // Enviar el tiempo actual
+    gl.uniform1f(obtener_ubicacion_uniform("u_speed"), configuracion_menu.velocidad_viaje); // Enviar la velocidad
+    gl.uniform1f(obtener_ubicacion_uniform("u_baseSize"), configuracion_menu.tamano_base); // Enviar el tamaño base
 
-    // Colores
-    gl.uniform3f(uLoc("u_colorCore"), settings.colorCore[0]/255, settings.colorCore[1]/255, settings.colorCore[2]/255);
-    gl.uniform3f(uLoc("u_colorRim"), settings.colorRim[0]/255, settings.colorRim[1]/255, settings.colorRim[2]/255);
+    // Enviar los colores (convertir de 0-255 a 0-1)
+    gl.uniform3f(obtener_ubicacion_uniform("u_colorCore"), configuracion_menu.color_centro[0]/255, configuracion_menu.color_centro[1]/255, configuracion_menu.color_centro[2]/255);
+    gl.uniform3f(obtener_ubicacion_uniform("u_colorRim"), configuracion_menu.color_borde[0]/255, configuracion_menu.color_borde[1]/255, configuracion_menu.color_borde[2]/255);
 
-    // 2. Matrices (Usando MVnew.js)
-    let aspect = gl.canvas.width / gl.canvas.height;
-    let projMatrix = perspective(60.0, aspect, 1.0, 4000.0); // Far plane alto para ver lejos
+    // 2. Calcular las matrices para la cámara 3D
+    let relacion_aspecto = gl.canvas.width / gl.canvas.height; // Relación ancho/alto de la pantalla
+    let matriz_proyeccion = perspective(60.0, relacion_aspecto, 1.0, 4000.0); // Crear perspectiva 3D (cosas lejos se ven pequeñas)
 
-    // Matriz de Vista con Cámara "Flotante" (Mouse Interaction)
-    let mvMatrix = mat4();
+    // Crear la matriz de vista (controla hacia dónde miramos)
+    let matriz_vista = mat4(); // Empezar con una matriz vacía
     
-    // Rotación por mouse (Mirar alrededor)
-    mvMatrix = mult(mvMatrix, rotateY(-mouseX * 20.0)); // Girar izquierda/derecha
-    mvMatrix = mult(mvMatrix, rotateX(-mouseY * 20.0)); // Girar arriba/abajo
+    // Rotar según el mouse (para mirar alrededor)
+    matriz_vista = mult(matriz_vista, rotateY(-mouse_x * 20.0)); // Girar horizontalmente con el mouse
+    matriz_vista = mult(matriz_vista, rotateX(-mouse_y * 20.0)); // Girar verticalmente con el mouse
     
-    // Rotación automática leve para dinamismo
-    mvMatrix = mult(mvMatrix, rotateZ(time * 2.0)); 
+    // Agregar una rotación automática lenta para que se vea dinámico
+    matriz_vista = mult(matriz_vista, rotateZ(tiempo_animacion * 2.0)); 
 
-    // Enviar Matrices
-    gl.uniformMatrix4fv(uLoc("u_projectionMatrix"), false, flatten(projMatrix));
-    gl.uniformMatrix4fv(uLoc("u_modelViewMatrix"), false, flatten(mvMatrix));
+    // Enviar las matrices al shader
+    gl.uniformMatrix4fv(obtener_ubicacion_uniform("u_projectionMatrix"), false, flatten(matriz_proyeccion));
+    gl.uniformMatrix4fv(obtener_ubicacion_uniform("u_modelViewMatrix"), false, flatten(matriz_vista));
 
-    // 3. Dibujar
-    // Usamos drawArrays porque POINTS no necesita índices complejos para optimización simple aquí
-    gl.drawArrays(gl.POINTS, 0, numParticles);
+    // 3. Dibujar todas las estrellas como puntos
+    gl.drawArrays(gl.POINTS, 0, cantidad_estrellas);
 
-    requestAnimationFrame(render);
+    // Repetir esta función continuamente para crear la animación
+    requestAnimationFrame(dibujar);
 }
 
-// Ajuste de ventana
+// Cuando el usuario cambia el tamaño de la ventana, ajustar el canvas
 window.onresize = () => {
     const c = document.getElementById("gl-canvas");
-    c.width = window.innerWidth;
-    c.height = window.innerHeight;
-    gl.viewport(0, 0, c.width, c.height);
+    c.width = window.innerWidth; // Hacer el canvas del ancho de la ventana
+    c.height = window.innerHeight; // Hacer el canvas del alto de la ventana
+    gl.viewport(0, 0, c.width, c.height); // Actualizar el área de dibujo
 };
 
 // ============================================================================
-// PARCHE DE COMPATIBILIDAD (Si tu librería es vieja)
+// FUNCIÓN AUXILIAR (por si la librería no la tiene)
 // ============================================================================
+// Esta función convierte matrices en un formato que entiende WebGL
 if (typeof flatten === 'undefined') {
     window.flatten = function(v) {
         if (v.matrix === true) v = transpose(v);

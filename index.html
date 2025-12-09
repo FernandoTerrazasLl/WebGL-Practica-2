@@ -29,114 +29,115 @@
     <script id="vertex-shader" type="x-shader/x-vertex">
     #version 300 es
     
-    // --- ATRIBUTOS (Datos únicos por cada estrella) ---
-    in vec3 a_posUniform;  // Posición en la Rejilla (Modo Uniforme / Principio Fuerte)
-    in vec3 a_posFractal;  // Posición en el Cúmulo (Modo Fractal / Principio Condicional)
-    in float a_size;       // Tamaño base aleatorio de esta estrella
-    in float a_colorVar;   // Variación de color (0.0 a 1.0) para esta estrella
+    // --- DATOS QUE RECIBIMOS PARA CADA ESTRELLA ---
+    in vec3 a_posUniform;  // Posición si está en modo ordenado (cuadrícula)
+    in vec3 a_posFractal;  // Posición si está en modo agrupado (galaxias)
+    in float a_size;       // Tamaño único de esta estrella
+    in float a_colorVar;   // Número aleatorio (0 a 1) para variar el color
 
-    // --- UNIFORMS (Variables globales controladas desde JS/UI) ---
-    uniform mat4 u_modelViewMatrix;  // Matriz de Cámara y Movimiento
-    uniform mat4 u_projectionMatrix; // Matriz de Perspectiva 3D
-    uniform float u_mixFactor;       // El Slider: 0.0 (Uniforme) <-> 1.0 (Fractal)
-    uniform float u_time;            // Tiempo actual para animación
-    uniform float u_speed;           // Velocidad de vuelo
-    uniform float u_baseSize;        // Multiplicador global de tamaño
+    // --- CONFIGURACIÓN QUE RECIBIMOS DEL MENÚ ---
+    uniform mat4 u_modelViewMatrix;  // Controla hacia dónde miramos y cómo rotamos
+    uniform mat4 u_projectionMatrix; // Controla la perspectiva 3D
+    uniform float u_mixFactor;       // Valor del slider: 0 = ordenado, 1 = agrupado
+    uniform float u_time;            // Tiempo actual para hacer que las cosas se muevan
+    uniform float u_speed;           // Qué tan rápido viajamos
+    uniform float u_baseSize;        // Multiplicador del tamaño de todas las estrellas
 
-    // --- SALIDAS (Datos que enviamos al Fragment Shader) ---
-    out float v_opacity;   // Opacidad calculada (para niebla)
-    out float v_colorMix;  // Pasamos el dato de color para que lo use el fragment
+    // --- DATOS QUE ENVIAMOS AL SIGUIENTE PASO (fragment shader) ---
+    out float v_opacity;   // Transparencia de esta estrella (para hacer niebla)
+    out float v_colorMix;  // El número de color que calculamos aquí
 
     void main() {
-        // 1. MORPHING (LA TEORÍA DEL PROYECTO):
-        // La función mix() interpola linealmente entre la posición Uniforme y la Fractal
-        // Esto visualiza el dilema: ¿El universo es ordenado o agrupado?
+        // 1. MEZCLAR ENTRE MODO ORDENADO Y AGRUPADO
+        // Si u_mixFactor es 0: usa a_posUniform (ordenado)
+        // Si u_mixFactor es 1: usa a_posFractal (agrupado)
+        // Si está en medio: mezcla ambas posiciones
         vec3 mixedPos = mix(a_posUniform, a_posFractal, u_mixFactor);
 
-        // 2. ANIMACIÓN DE VUELO INFINITO:
-        // Movemos la estrella en Z. Usamos 'mod' (módulo) para crear un bucle:
-        // cuando la estrella pasa detrás de la cámara, reaparece al fondo (3000 unidades atrás).
+        // 2. HACER QUE LAS ESTRELLAS SE MUEVAN HACIA NOSOTROS
+        // Multiplicamos el tiempo por la velocidad para mover en Z
+        // Usamos mod para que cuando pase de 3000, vuelva a -1500 (bucle infinito)
         float zPos = mod(mixedPos.z + (u_time * u_speed), 3000.0) - 1500.0;
         
-        // Construimos la posición final combinando X, Y interpolados y la nueva Z animada
-        // El 1.0 final es la coordenada W homogénea (necesaria para matrices 4x4)
+        // Crear la posición final en 3D combinando X, Y de la mezcla y la Z animada
         vec4 pos = u_modelViewMatrix * vec4(mixedPos.x, mixedPos.y, zPos, 1.0);
 
-        // 3. CÁLCULO DE TAMAÑO Y EFECTOS VISUALES:
+        // 3. CALCULAR EL TAMAÑO DE ESTA ESTRELLA EN PANTALLA
         
-        // Escala por distancia: (1000 / -Z). Cuanto más lejos (-Z grande), más pequeño el número.
+        // Las cosas lejanas se ven más pequeñas: dividimos 1000 entre la distancia
+        // pos.z es negativo cuando está delante de nosotros, por eso usamos -pos.z
         float distScale = 1000.0 / -pos.z;
         
-        // Tamaño Final del Punto (gl_PointSize es una variable reservada de WebGL):
-        // Combina: Tamaño individual * Slider Base * Distancia
-        // max(0.0, ...) asegura que no sea negativo.
+        // Calcular tamaño final: tamaño único × tamaño del menú × efecto de distancia
+        // max asegura que nunca sea negativo
         gl_PointSize = max(0.0, a_size * u_baseSize * distScale);
 
-        // Niebla (Fog):
-        // smoothstep hace que la opacidad baje suavemente a 0 cuando la estrella está muy lejos
+        // 4. CREAR EFECTO DE NIEBLA (las cosas lejanas se ven más transparentes)
+        // smoothstep hace una transición suave entre 1500 y 1000
+        // Si está más lejos de 1500: transparente (0), si está más cerca de 1000: opaco (1)
         float fog = smoothstep(1500.0, 1000.0, abs(zPos));
         
-        // Ajuste de visibilidad según el modo:
-        // En modo Fractal (mix 1.0) brillan más. En Uniforme (mix 0.8) son un poco más tenues.
+        // En modo agrupado brillan más (1.0), en modo ordenado un poco menos (0.8)
         v_opacity = fog * mix(0.8, 1.0, u_mixFactor); 
         
-        // Pasar la variación de color al siguiente paso
+        // Pasar el color al siguiente paso
         v_colorMix = a_colorVar;
         
-        // Posición final en pantalla (Clip Space)
+        // Calcular la posición final en pantalla con perspectiva
         gl_Position = u_projectionMatrix * pos;
     }
     </script>
 
     <script id="fragment-shader" type="x-shader/x-fragment">
     #version 300 es
-    // Definimos precisión media para rendimiento en móviles/web
+    // Usar precisión media para que funcione bien en todos los dispositivos
     precision mediump float;
 
-    // Uniforms de color definidos en la UI
-    uniform vec3 u_colorCore; // Color central
-    uniform vec3 u_colorRim;  // Color del borde
-    // IMPORTANTE: Usamos 'highp' aquí para igualar la precisión del Vertex Shader
-    // y evitar el error de "Link Error: Precisions differ"
+    // Colores que configuramos en el menú
+    uniform vec3 u_colorCore; // Color del centro de las estrellas
+    uniform vec3 u_colorRim;  // Color del borde de las estrellas
+    // Necesitamos alta precisión aquí para que coincida con el vertex shader
     uniform highp float u_mixFactor; 
 
-    // Entradas que vienen del Vertex Shader (interpoladas)
-    in float v_opacity;
-    in float v_colorMix;
+    // Datos que recibimos del vertex shader
+    in float v_opacity;   // Qué tan transparente es esta estrella
+    in float v_colorMix;  // Número para variar el color
     
-    // Salida final: El color del píxel en pantalla
+    // Color final que vamos a mostrar en pantalla
     out vec4 outColor;
 
     void main() {
-        // 1. FORMA REDONDA:
-        // gl_PointCoord va de (0,0) a (1,1) dentro del punto cuadrado.
-        // Restamos 0.5 para centrar las coordenadas en (0,0).
+        // 1. HACER QUE LAS ESTRELLAS SEAN REDONDAS
+        // gl_PointCoord nos da la posición dentro del cuadrado del punto (de 0 a 1)
+        // Restamos 0.5 para centrar en 0, así podemos medir la distancia al centro
         vec2 coord = gl_PointCoord - vec2(0.5);
         
-        // Calculamos la distancia al centro
+        // Calcular qué tan lejos estamos del centro
         float dist = length(coord);
         
-        // Si la distancia es mayor a 0.5 (radio), es una esquina del cuadrado.
-        // La descartamos (la hacemos transparente) para que quede un círculo.
+        // Si estamos más lejos de 0.5, estamos en las esquinas del cuadrado
+        // Descartar esos pixeles para que solo quede un círculo
         if (dist > 0.5) discard;
 
-        // 2. SISTEMA DE COLOR:
-        // Color Fractal: Mezcla entre núcleo y borde según la variación única de la estrella
+        // 2. CALCULAR EL COLOR DE ESTA ESTRELLA
+        // Mezclar entre el color del centro y el borde según el número aleatorio
         vec3 fractalColor = mix(u_colorCore, u_colorRim, v_colorMix);
         
-        // Color Uniforme: Blanco/Gris (0.9) para representar la "sopa homogénea" aburrida
+        // Para el modo ordenado, usar un gris claro (todas iguales, sin variedad)
         vec3 uniformColor = vec3(0.9, 0.9, 0.9); 
 
-        // Interpolamos el color final según el slider de la UI
+        // Mezclar entre gris (modo ordenado) y colores variados (modo agrupado)
+        // según el valor del slider
         vec3 finalColor = mix(uniformColor, fractalColor, u_mixFactor);
 
-        // 3. EFECTO GLOW (BRILLO):
-        // Invertimos la distancia: 1.0 en el centro, 0.0 en el borde.
+        // 3. HACER QUE EL CENTRO BRILLE MÁS QUE LOS BORDES
+        // Invertir la distancia: 1.0 en el centro, 0.0 en el borde
         float alpha = 1.0 - (dist * 2.0);
-        // Elevamos al cuadrado para que la caída de luz sea más suave (tipo esfera de gas)
+        // Elevar al cuadrado para que el brillo caiga más suavemente
         alpha = pow(alpha, 2.0); 
 
-        // Asignar color final (RGB) y transparencia (Alpha * Opacidad calculada antes)
+        // Crear el color final: RGB del color + Alpha de transparencia
+        // Multiplicar alpha por v_opacity para que las estrellas lejanas sean más transparentes
         outColor = vec4(finalColor, alpha * v_opacity);
     }
     </script>
