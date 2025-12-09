@@ -258,23 +258,3 @@ window.onresize = () => {
     c.height = window.innerHeight; // Hacer el canvas del alto de la ventana
     gl.viewport(0, 0, c.width, c.height); // Actualizar el área de dibujo
 };
-
-// ============================================================================
-// FUNCIÓN AUXILIAR (por si la librería no la tiene)
-// ============================================================================
-// Esta función convierte matrices en un formato que entiende WebGL
-if (typeof flatten === 'undefined') {
-    window.flatten = function(v) {
-        if (v.matrix === true) v = transpose(v);
-        var n = v.length;
-        if (typeof(v[0]) === 'object' && v[0] instanceof Float32Array) {
-            var m = v[0].length;
-            var floats = new Float32Array(n * m);
-            for (var i = 0; i < n; i++) for (var j = 0; j < m; j++) floats[i * m + j] = v[i][j];
-            return floats;
-        }
-        var floats = new Float32Array(n);
-        for (var i = 0; i < n; i++) floats[i] = v[i];
-        return floats;
-    }
-}
